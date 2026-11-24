@@ -1,0 +1,45 @@
+{
+  "human": {
+    "base_delay_ms": 255,
+    "jitter_ms": 135,
+    "space_pause_ms": 210,
+    "newline_pause_ms": 570,
+    "punctuation_pause_ms": 180,
+    "hesitation_chance": 0.03,
+    "hesitation_min_ms": 450,
+    "hesitation_max_ms": 1350
+  },
+  "human_normal": {
+    "base_delay_ms": 170,
+    "jitter_ms": 90,
+    "space_pause_ms": 140,
+    "newline_pause_ms": 380,
+    "punctuation_pause_ms": 120,
+    "hesitation_chance": 0.03,
+    "hesitation_min_ms": 300,
+    "hesitation_max_ms": 900
+  },
+  "default": {
+    "name": "default",
+    "mode": "human_normal",
+    "char_delay_ms": 60,
+    "chunk_size": 64,
+    "chunk_wait_ms": 30,
+    "per_box_wait_ms": 60,
+    "trailing_tab": false
+  },
+  "profiles": [
+    {
+      "name": "editors",
+      "match_exe": ["notepad.exe", "notepad++.exe", "code.exe", "sublime_text.exe"],
+      "mode": "char",
+      "char_delay_ms": 75
+    },
+    {
+      "name": "office",
+      "match_exe": ["winword.exe", "excel.exe", "powerpnt.exe", "wps.exe"],
+      "mode": "char",
+      "char_delay_ms": 75
+    }
+  ]
+}
