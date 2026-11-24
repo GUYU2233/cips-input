@@ -1,0 +1,10 @@
+# Keep the repository text files LF everywhere so Windows and Linux checkouts
+# match (the PowerShell/Python tooling here does not care either way, but LF
+# avoids spurious CRLF churn in diffs).
+* text=auto eol=lf
+
+# Binary assets: never touch their line endings.
+*.ico binary
+*.png binary
+*.exe binary
+*.dll binary

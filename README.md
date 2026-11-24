@@ -308,4 +308,4 @@ CHANGELOG.md                 版本变更记录
 
 ## 许可
 
-本仓库的 cips-input 模块沿用上游 PIME 的 **LGPL-2.1-or-later**。`_pime/` 目录是上游源码的只读参考副本，未入版本库。
+本仓库的 cips-input 模块沿用上游 PIME 的 **LGPL-2.1-or-later**，完整许可证文本见 [`LICENSE`](LICENSE)。`_pime/` 目录是上游源码的只读参考副本，未入版本库；安装包内置的第三方组件声明见 [`deploy/bundle/THIRD_PARTY_NOTICES.md`](deploy/bundle/THIRD_PARTY_NOTICES.md)。
