@@ -4,18 +4,21 @@
 // that ships with Windows (csc.exe), so the project needs no extra toolchain.
 //
 // Responsibilities:
-//   1. carry the whole payload (official PIME installer + cips-input module +
-//      install.ps1) as an embedded zip resource,
+//   1. carry the payload (official PIME installer + cips-input module +
+//      prebuilt rime-frost + install.ps1) as an embedded zip resource,
 //   2. request elevation through the manifest (app.manifest),
-//   3. extract the payload to a temporary folder,
-//   4. run install.ps1 with Windows PowerShell 5.1, streaming its output into
-//      a small progress window,
+//   3. in GUI mode, let the user opt in to installing the Wanxiang language
+//      model (wanxiang-lts-zh-hans.gram, downloaded or picked locally),
+//   4. extract the payload to a temporary folder and run install.ps1 with
+//      Windows PowerShell 5.1, streaming its output into the progress window,
 //   5. clean up the temporary folder and report the exit code.
 //
 // /batch runs without UI and without waiting for a click (used by CI tests).
-// Every other switch is forwarded to install.ps1, e.g. /batch -DryRun.
+// Every other switch is forwarded to install.ps1, e.g. /batch -DryRun or
+// /batch -InstallGram.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -29,7 +32,6 @@ namespace CipsInputInstaller
 {
     internal static class Program
     {
-        private const string ResourceName = "cips.payload.zip";
         private const string MutexName = "Global\\cips-input-installer";
 
         [STAThread]
@@ -45,7 +47,7 @@ namespace CipsInputInstaller
                 {
                     if (!batch)
                     {
-                        MessageBox.Show("cips-input is already being installed.", "cips-input",
+                        MessageBox.Show("cips-input 正在安装中，请等待当前安装完成。", "cips-input",
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     return 2;
@@ -67,11 +69,10 @@ namespace CipsInputInstaller
             }
         }
 
-        // Returns true for /batch; everything else is forwarded to install.ps1.
         private static bool SplitArgs(string[] args, out string[] forwarded)
         {
             bool batch = false;
-            System.Collections.Generic.List<string> rest = new System.Collections.Generic.List<string>();
+            List<string> rest = new List<string>();
             if (args != null)
             {
                 foreach (string arg in args)
@@ -230,22 +231,31 @@ namespace CipsInputInstaller
 
     internal sealed class InstallerForm : Form
     {
-        private readonly string[] _psArgs;
+        private const string GramFileName = "wanxiang-lts-zh-hans.gram";
+
+        private readonly string[] _baseArgs;
         private readonly string _logPath;
+        private readonly CheckBox _gramCheckBox;
+        private readonly Button _browseGramButton;
+        private readonly Label _gramHint;
         private readonly Label _status;
         private readonly ProgressBar _progress;
         private readonly TextBox _output;
+        private readonly Button _installButton;
         private readonly Button _closeButton;
+
+        private string _localGramPath = "";
         private int _exitCode = 1;
-        private bool _running = true;
+        private bool _running = false;
+        private bool _finished = false;
 
         public InstallerForm(string[] psArgs, string logPath)
         {
-            _psArgs = psArgs;
+            _baseArgs = psArgs ?? new string[0];
             _logPath = logPath;
 
             Text = "cips-input 安装程序";
-            ClientSize = new Size(620, 430);
+            ClientSize = new Size(640, 505);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -260,24 +270,53 @@ namespace CipsInputInstaller
             Controls.Add(title);
 
             Label description = new Label();
-            description.Text = "将安装 cips-input 输入法（内置 PIME 运行时）。安装需要管理员权限。";
+            description.Text = "内置白霜拼音（Rime Frost）与剪贴板模拟按键注入（含 PIME 运行时）。需要管理员权限。";
             description.AutoSize = true;
-            description.Location = new Point(18, 44);
+            description.Location = new Point(18, 42);
             Controls.Add(description);
 
+            GroupBox optionsBox = new GroupBox();
+            optionsBox.Text = "可选组件";
+            optionsBox.Location = new Point(18, 68);
+            optionsBox.Size = new Size(604, 78);
+            Controls.Add(optionsBox);
+
+            _gramCheckBox = new CheckBox();
+            _gramCheckBox.Text = "附带安装万象语言模型 (wanxiang-lts-zh-hans.gram，约 373 MB)";
+            _gramCheckBox.AutoSize = true;
+            _gramCheckBox.Location = new Point(12, 22);
+            _gramCheckBox.CheckedChanged += delegate { UpdateGramHint(); };
+            optionsBox.Controls.Add(_gramCheckBox);
+
+            _browseGramButton = new Button();
+            _browseGramButton.Text = "选择本地模型...";
+            _browseGramButton.Size = new Size(116, 24);
+            _browseGramButton.Location = new Point(476, 18);
+            _browseGramButton.Click += OnBrowseGram;
+            optionsBox.Controls.Add(_browseGramButton);
+
+            _gramHint = new Label();
+            _gramHint.AutoSize = false;
+            _gramHint.AutoEllipsis = true;
+            _gramHint.ForeColor = Color.DimGray;
+            _gramHint.Location = new Point(30, 48);
+            _gramHint.Size = new Size(560, 20);
+            optionsBox.Controls.Add(_gramHint);
+
+            DetectInitialGramOptions();
+
             _status = new Label();
-            _status.Text = "正在准备...";
+            _status.Text = "请确认安装选项后点击“开始安装”。";
             _status.AutoSize = false;
             _status.AutoEllipsis = true;
-            _status.Location = new Point(18, 74);
-            _status.Size = new Size(584, 20);
+            _status.Location = new Point(18, 156);
+            _status.Size = new Size(604, 20);
             Controls.Add(_status);
 
             _progress = new ProgressBar();
-            _progress.Style = ProgressBarStyle.Marquee;
-            _progress.MarqueeAnimationSpeed = 30;
-            _progress.Location = new Point(18, 98);
-            _progress.Size = new Size(584, 16);
+            _progress.Style = ProgressBarStyle.Blocks;
+            _progress.Location = new Point(18, 180);
+            _progress.Size = new Size(604, 16);
             Controls.Add(_progress);
 
             _output = new TextBox();
@@ -287,18 +326,25 @@ namespace CipsInputInstaller
             _output.WordWrap = false;
             _output.Font = new Font("Consolas", 8.5F);
             _output.BackColor = Color.FromArgb(250, 250, 250);
-            _output.Location = new Point(18, 124);
-            _output.Size = new Size(584, 250);
+            _output.Location = new Point(18, 206);
+            _output.Size = new Size(604, 244);
             Controls.Add(_output);
 
+            _installButton = new Button();
+            _installButton.Text = "开始安装";
+            _installButton.Size = new Size(104, 30);
+            _installButton.Location = new Point(410, 462);
+            _installButton.Click += OnStartInstall;
+            Controls.Add(_installButton);
+
             _closeButton = new Button();
-            _closeButton.Text = "关闭";
-            _closeButton.Enabled = false;
+            _closeButton.Text = "取消";
             _closeButton.Size = new Size(96, 30);
-            _closeButton.Location = new Point(506, 386);
+            _closeButton.Location = new Point(526, 462);
             _closeButton.Click += delegate { Close(); };
             Controls.Add(_closeButton);
 
+            AcceptButton = _installButton;
             FormClosing += OnFormClosing;
         }
 
@@ -307,17 +353,129 @@ namespace CipsInputInstaller
             get { return _exitCode; }
         }
 
-        protected override void OnShown(EventArgs e)
+        private void DetectInitialGramOptions()
         {
-            base.OnShown(e);
-            Thread worker = new Thread(Worker);
+            for (int i = 0; i < _baseArgs.Length; i++)
+            {
+                if (string.Equals(_baseArgs[i], "-InstallGram", StringComparison.OrdinalIgnoreCase))
+                {
+                    _gramCheckBox.Checked = true;
+                }
+                else if (string.Equals(_baseArgs[i], "-GramPath", StringComparison.OrdinalIgnoreCase) && i + 1 < _baseArgs.Length)
+                {
+                    _localGramPath = _baseArgs[i + 1];
+                    _gramCheckBox.Checked = true;
+                }
+            }
+
+            if (string.IsNullOrEmpty(_localGramPath))
+            {
+                try
+                {
+                    string exeDir = Path.GetDirectoryName(Application.ExecutablePath);
+                    if (!string.IsNullOrEmpty(exeDir))
+                    {
+                        string sibling = Path.Combine(exeDir, GramFileName);
+                        if (File.Exists(sibling))
+                        {
+                            _localGramPath = sibling;
+                            _gramCheckBox.Checked = true;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore path inspection failures.
+                }
+            }
+            UpdateGramHint();
+        }
+
+        private void UpdateGramHint()
+        {
+            if (!_gramCheckBox.Checked)
+            {
+                _gramHint.Text = "未勾选：仅安装白霜拼音词库（离线可用，也可稍后随时手动或重跑安装器补充）。";
+            }
+            else if (!string.IsNullOrEmpty(_localGramPath))
+            {
+                _gramHint.Text = "将使用本地模型文件：" + _localGramPath;
+            }
+            else
+            {
+                _gramHint.Text = "将从 GitHub Release 下载 wanxiang-lts-zh-hans.gram (~373 MB) 并启用整句模型。";
+            }
+        }
+
+        private void OnBrowseGram(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "选择万象语言模型文件 (" + GramFileName + ")";
+                dialog.Filter = "Rime 语言模型 (*.gram)|*.gram|所有文件 (*.*)|*.*";
+                dialog.FileName = GramFileName;
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    _localGramPath = dialog.FileName;
+                    _gramCheckBox.Checked = true;
+                    UpdateGramHint();
+                }
+            }
+        }
+
+        private void OnStartInstall(object sender, EventArgs e)
+        {
+            if (_running || _finished) { return; }
+
+            List<string> finalArgs = new List<string>();
+            bool hasInstallGram = false;
+            bool hasGramPath = false;
+            foreach (string arg in _baseArgs)
+            {
+                if (string.Equals(arg, "-InstallGram", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!_gramCheckBox.Checked) { continue; }
+                    hasInstallGram = true;
+                }
+                finalArgs.Add(arg);
+            }
+            for (int i = 0; i < finalArgs.Count; i++)
+            {
+                if (string.Equals(finalArgs[i], "-GramPath", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasGramPath = true;
+                    break;
+                }
+            }
+
+            if (_gramCheckBox.Checked)
+            {
+                if (!hasInstallGram) { finalArgs.Add("-InstallGram"); }
+                if (!hasGramPath && !string.IsNullOrEmpty(_localGramPath))
+                {
+                    finalArgs.Add("-GramPath");
+                    finalArgs.Add(_localGramPath);
+                }
+            }
+
+            _running = true;
+            _installButton.Enabled = false;
+            _gramCheckBox.Enabled = false;
+            _browseGramButton.Enabled = false;
+            _closeButton.Enabled = false;
+            _status.Text = "正在安装...";
+            _progress.Style = ProgressBarStyle.Marquee;
+            _progress.MarqueeAnimationSpeed = 30;
+
+            string[] argsCopy = finalArgs.ToArray();
+            Thread worker = new Thread(delegate() { Worker(argsCopy); });
             worker.IsBackground = true;
             worker.Start();
         }
 
-        private void Worker()
+        private void Worker(string[] args)
         {
-            int code = Runner.Run(_psArgs, _logPath, OnLine);
+            int code = Runner.Run(args, _logPath, OnLine);
             try
             {
                 BeginInvoke(new Action<int>(Finish), code);
@@ -355,8 +513,10 @@ namespace CipsInputInstaller
         {
             _exitCode = code;
             _running = false;
+            _finished = true;
             _progress.Style = ProgressBarStyle.Blocks;
             _progress.MarqueeAnimationSpeed = 0;
+            _closeButton.Text = "关闭";
             _closeButton.Enabled = true;
             if (code == 0)
             {
@@ -377,6 +537,10 @@ namespace CipsInputInstaller
                 e.Cancel = true;
                 MessageBox.Show("安装正在进行，请等待它结束。", "cips-input",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else if (!_finished)
+            {
+                _exitCode = 1;
             }
         }
     }

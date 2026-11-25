@@ -29,3 +29,7 @@ out/
 *.log
 tmp/
 .tmp/
+
+# 内置 Rime 运行时与词库（由 deploy\prepare_rime.ps1 拉取并预编译）
+src/input_methods/cips/rime_runtime/
+src/input_methods/cips/rime_data/

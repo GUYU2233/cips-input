@@ -1,0 +1,10 @@
+# Default schema selection for cips-input built-in Rime Frost
+# encoding: utf-8
+
+patch:
+  schema_list:
+    - schema: rime_frost                      # 白霜拼音（全拼）
+    - schema: rime_frost_double_pinyin        # 自然码双拼
+    - schema: rime_frost_double_pinyin_flypy  # 小鹤双拼
+    - schema: rime_frost_double_pinyin_mspy   # 微软双拼
+    - schema: rime_frost_double_pinyin_sogou  # 搜狗双拼

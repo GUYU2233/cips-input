@@ -8,14 +8,6 @@
     profile (the GUID declared in ime.json) shows up in the Windows input
     method list.
 
-    Why re-registration is required: PIME discovers input methods by scanning
-    <programDir>\<backendDir>\input_methods\*\ime.json inside
-    PIMETextService's DllRegisterServer (see PIMETextService/DllEntry.cpp).
-    Dropping a folder on disk alone does not create the TSF language profile,
-    so the IME never appears to Windows. The official installer performs the
-    same step through the RegisterTextService macro in installer/macros.nsh,
-    which is exactly `regsvr32 /s` on the x64 and x86 DLLs.
-
 .PARAMETER PimeDir
     Root of the PIME installation. Auto-detected when omitted.
 
@@ -25,20 +17,32 @@
 .PARAMETER SkipRestart
     Do not stop a running PIMELauncher afterwards.
 
+.PARAMETER PrepareRime
+    Run deploy\prepare_rime.ps1 to stage librime + precompiled rime-frost
+    into the deployed backend.
+
+.PARAMETER InstallGram
+    Download/verify wanxiang-lts-zh-hans.gram (~373 MB) into rime_data and
+    apply rime_frost_with_gram patches.
+
+.PARAMETER GramPath
+    Use a local .gram file instead of downloading when -InstallGram is set.
+
+.PARAMETER SkipDownload
+    Do not download upstream archives when staging Rime.
+
 .PARAMETER Uninstall
     Remove the deployed CIPS folder and re-register (dropping the profile).
-
-.EXAMPLE
-    .\install_backend.ps1
-
-.EXAMPLE
-    .\install_backend.ps1 -PimeDir 'D:\Apps\PIME' -SkipRegister
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string] $PimeDir,
     [switch] $SkipRegister,
     [switch] $SkipRestart,
+    [switch] $PrepareRime,
+    [switch] $InstallGram,
+    [string] $GramPath,
+    [switch] $SkipDownload,
     [switch] $Uninstall
 )
 
@@ -46,6 +50,18 @@ $ErrorActionPreference = 'Stop'
 
 $BackendSubDir = 'python\input_methods\cips'
 $LauncherName  = 'PIMELauncher.exe'
+$GramUrl       = 'https://github.com/amzxyz/rime-wanxiang-data/releases/download/LTS/wanxiang-lts-zh-hans.gram'
+$GramSha256    = 'e9ddd501b7d536bc5ea1346f8f900ae49a719a05be349e0a17cb27e717143ca5'
+$GramSize      = 390786092
+$GramPatchSchemas = @(
+    'rime_frost',
+    'rime_frost_double_pinyin',
+    'rime_frost_double_pinyin_flypy',
+    'rime_frost_double_pinyin_mspy',
+    'rime_frost_double_pinyin_sogou',
+    'rime_frost_double_pinyin_abc',
+    'rime_frost_double_pinyin_ziguang'
+)
 
 function Test-IsElevated {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -57,7 +73,6 @@ function Test-PimeRoot {
     param([string] $Path)
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
-    # backends.json plus the TSF DLLs are the two things any PIME 2.x tree has.
     return (Test-Path -LiteralPath (Join-Path $Path 'backends.json') -PathType Leaf)
 }
 
@@ -68,8 +83,6 @@ function Find-PimeRoot {
         if ($base) { $candidates.Add((Join-Path $base 'PIME')) }
     }
 
-    # Fall back to the uninstall registry entries in case PIME was installed
-    # somewhere non-standard.
     $uninstallRoots = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
@@ -90,10 +103,6 @@ function Find-PimeRoot {
     return $null
 }
 
-# Resolve the 64-bit and 32-bit regsvr32 explicitly. PIME needs both DLLs
-# registered: a 32-bit host process loads the x86 text service, a 64-bit host
-# loads the x64 one. Under a 32-bit PowerShell, System32 is redirected to
-# SysWOW64, so the native one is reached through Sysnative.
 function Get-Regsvr32Paths {
     $windows = $env:SystemRoot
     if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
@@ -129,16 +138,10 @@ function Invoke-Registration {
         }
         $any = $true
         if (-not $PSCmdlet.ShouldProcess($target.Dll, "regsvr32 /s ($($target.Arch))")) { continue }
-        # regsvr32 is a GUI-subsystem binary: in Windows PowerShell the call
-        # operator does not wait for it and leaves $LASTEXITCODE unset, which
-        # makes a successful registration look like a failure. Start-Process
-        # with -Wait is the only reliable way to get its exit code.
         $arguments = @('/s', ('"{0}"' -f $target.Dll))
         $proc = Start-Process -FilePath $target.Exe -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
         $code = $proc.ExitCode
         if ($code -ne 0) {
-            # regsvr32 with /s reports failure only through the exit code; it
-            # pops no dialog, so surface the number here.
             throw ("regsvr32 failed for {0} (exit code {1}). Run this script in an elevated shell." -f $target.Dll, $code)
         }
         Write-Host ("  registered {0} -> {1}" -f $target.Arch, $target.Dll)
@@ -157,8 +160,6 @@ function Stop-Launcher {
     if (-not $running) { return }
     if (-not $PSCmdlet.ShouldProcess('PIMELauncher', 'graceful /quit')) { return }
     try {
-        # Documented graceful shutdown switch; the launcher will be restarted
-        # on demand by the text service.
         & $exe /quit | Out-Null
         Start-Sleep -Milliseconds 800
         Write-Host '  stopped PIMELauncher (it restarts on demand)'
@@ -183,8 +184,6 @@ if (-not (Test-PimeRoot -Path $PimeDir)) {
 
 $dest = Join-Path $PimeDir $BackendSubDir
 
-# Guard: never operate on a path that is not the CIPS backend folder inside an
-# input_methods directory. This protects the recursive delete below.
 $destFull = [IO.Path]::GetFullPath($dest)
 $expectedTail = [IO.Path]::GetFullPath((Join-Path $PimeDir $BackendSubDir))
 if ($destFull -ne $expectedTail -or $destFull -notmatch 'input_methods[\\/]cips$') {
@@ -210,7 +209,8 @@ if ($Uninstall) {
     return
 }
 
-$source = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\src\input_methods\cips'))
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$source = Join-Path $repoRoot 'src\input_methods\cips'
 if (-not (Test-Path -LiteralPath $source -PathType Container)) {
     throw ("Source backend not found: {0}" -f $source)
 }
@@ -218,22 +218,106 @@ if (-not (Test-Path -LiteralPath (Join-Path $source 'ime.json') -PathType Leaf))
     throw ("ime.json missing in source backend: {0}" -f $source)
 }
 
+$rimeStage = $null
+if ($PrepareRime) {
+    $prepareScript = Join-Path $PSScriptRoot 'prepare_rime.ps1'
+    $rimeStage = Join-Path $repoRoot 'build\bundle\rime_stage'
+    $prepArgs = @{ TargetDir = $rimeStage }
+    if ($SkipDownload) { $prepArgs['SkipDownload'] = $true }
+    & $prepareScript @prepArgs
+}
+
 Write-Host "Source: $source"
 Write-Host "Target: $destFull"
 
+$wantGram = [bool]$InstallGram -or (-not [string]::IsNullOrWhiteSpace($GramPath))
+
 if ($PSCmdlet.ShouldProcess($destFull, 'replace backend folder')) {
+    $preservedRime = @{}
+    if (-not $PrepareRime -and (Test-Path -LiteralPath $destFull)) {
+        # Preserve already-deployed rime_runtime / rime_data when updating Python files.
+        foreach ($sub in @('rime_runtime', 'rime_data')) {
+            $oldSub = Join-Path $destFull $sub
+            if (Test-Path -LiteralPath $oldSub) {
+                $tmpSub = Join-Path $env:TEMP ('cips-preserve-' + $sub + '-' + [Guid]::NewGuid().ToString('N'))
+                Move-Item -LiteralPath $oldSub -Destination $tmpSub -Force
+                $preservedRime[$sub] = $tmpSub
+            }
+        }
+    }
+
     if (Test-Path -LiteralPath $destFull) {
-        # Replace rather than merge so that deleted/renamed modules do not
-        # linger from a previous deployment.
         Remove-Item -LiteralPath $destFull -Recurse -Force
     }
     New-Item -ItemType Directory -Path $destFull -Force | Out-Null
 
     Copy-Item -Path (Join-Path $source '*') -Destination $destFull -Recurse -Force
-    # Byte-code caches are machine specific and can mask a stale module.
     Get-ChildItem -LiteralPath $destFull -Recurse -Force -Directory -Filter '__pycache__' |
         Remove-Item -Recurse -Force
+
+    if ($rimeStage) {
+        foreach ($sub in @('rime_runtime', 'rime_data')) {
+            $dstSub = Join-Path $destFull $sub
+            if (Test-Path -LiteralPath $dstSub) { Remove-Item -LiteralPath $dstSub -Recurse -Force }
+            Copy-Item -LiteralPath (Join-Path $rimeStage $sub) -Destination $dstSub -Recurse -Force
+        }
+    } else {
+        foreach ($kv in $preservedRime.GetEnumerator()) {
+            $dstSub = Join-Path $destFull $kv.Key
+            if (-not (Test-Path -LiteralPath $dstSub)) {
+                Move-Item -LiteralPath $kv.Value -Destination $dstSub -Force
+            } else {
+                Remove-Item -LiteralPath $kv.Value -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
     Write-Host '  copied backend files'
+}
+
+if ($wantGram) {
+    $dataDir = Join-Path $destFull 'rime_data'
+    $runtimeDir = Join-Path $destFull 'rime_runtime'
+    if (-not (Test-Path -LiteralPath $dataDir)) {
+        throw "rime_data missing in target; re-run with -PrepareRime to install Rime Frost first."
+    }
+    $destGram = Join-Path $dataDir 'wanxiang-lts-zh-hans.gram'
+    if ($GramPath) {
+        Copy-Item -LiteralPath ([IO.Path]::GetFullPath($GramPath)) -Destination $destGram -Force
+    } else {
+        $cacheGram = Join-Path $repoRoot 'build\cache\wanxiang-lts-zh-hans.gram'
+        if (-not (Test-Path -LiteralPath $cacheGram)) {
+            if ($SkipDownload) { throw "wanxiang-lts-zh-hans.gram not cached and -SkipDownload was specified." }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $cacheGram) -Force | Out-Null
+            Write-Host "  downloading $GramUrl (~373 MB)..."
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -Uri $GramUrl -OutFile $cacheGram -TimeoutSec 1800
+        }
+        $actual = (Get-FileHash -LiteralPath $cacheGram -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $GramSha256) {
+            throw ("wanxiang-lts-zh-hans.gram checksum mismatch ({0} != {1})" -f $actual, $GramSha256)
+        }
+        Copy-Item -LiteralPath $cacheGram -Destination $destGram -Force
+    }
+
+    $patchSrc = Join-Path $destFull 'rime_config\gram_patch.yaml'
+    foreach ($schema in $GramPatchSchemas) {
+        Copy-Item -LiteralPath $patchSrc -Destination (Join-Path $dataDir ($schema + '.custom.yaml')) -Force
+    }
+    $deployer = Join-Path $runtimeDir 'rime_deployer.exe'
+    if (Test-Path -LiteralPath $deployer) {
+        $oldPath = $env:PATH
+        try {
+            $env:PATH = $runtimeDir + ';' + $oldPath
+            & $deployer --build $dataDir $dataDir (Join-Path $dataDir 'build') | Out-Null
+        } finally {
+            $env:PATH = $oldPath
+        }
+        foreach ($ephemeral in @('user.yaml', 'installation.yaml')) {
+            $ep = Join-Path $dataDir $ephemeral
+            if (Test-Path -LiteralPath $ep) { Remove-Item -LiteralPath $ep -Force }
+        }
+    }
+    Write-Host '  enabled wanxiang-lts-zh-hans.gram'
 }
 
 if (-not $SkipRegister) { Invoke-Registration -Root $PimeDir }
@@ -242,6 +326,5 @@ if (-not $SkipRestart)  { Stop-Launcher -Root $PimeDir }
 Write-Host ''
 Write-Host 'Done. Next steps:'
 Write-Host '  1. Press Win+Space (or click the language indicator) and pick "cips-input".'
-Write-Host '  2. If PIME was never installed on this machine, run the official installer once first.'
-Write-Host '  3. Diagnostics: %LOCALAPPDATA%\PIME\Logs\cips.log (uncaught backend errors: python_backend.log)'
-Write-Host '  4. Edit profiles.json in the deployed folder to tune per-app pacing; no restart needed.'
+Write-Host '  2. Diagnostics: %LOCALAPPDATA%\PIME\Logs\cips.log'
+Write-Host '  3. Rime user data: %APPDATA%\cips-input\rime'

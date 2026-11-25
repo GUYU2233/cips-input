@@ -94,11 +94,15 @@ cd D:\Project\cips\cips-input
 powershell -ExecutionPolicy Bypass -File deploy\bundle\build_installer.ps1
 ```
 
-产物是 `build\dist\cips-input-setup-<version>.exe`（约 47 MB，另附 `SHA256SUMS.txt`）。第一次构建会下载官方 PIME 安装包到 `build\cache` 并校验 SHA-256，之后可离线重复构建；`-PimeSetup <路径>` 可指定本地安装包，`-SkipDownload` 强制离线，`-SkipSelfTest` 跳过自检。构建需要 .NET Framework 4.x（Windows 10/11 自带）与 PowerShell 5.1，不需要 NSIS、7-Zip 或 PyInstaller。
+产物是 `build\dist\cips-input-setup-<version>.exe`（内置 PIME 与预编译白霜词库，另附 `SHA256SUMS.txt`）。第一次构建会下载官方 PIME 安装包、`librime` 1.17.0（x86）与 `rime-frost` 1.0.6 到 `build\cache` 并校验 SHA-256，之后可离线重复构建；`-PimeSetup <路径>` 可指定本地安装包，`-SkipDownload` 强制离线，`-SkipSelfTest` 跳过自检。构建需要 .NET Framework 4.x（Windows 10/11 自带）与 PowerShell 5.1，不需要 NSIS、7-Zip 或 PyInstaller。
 
-双击安装包 → 接受 UAC → 等进度窗口跑完 → `Win + Space` 选「cips-input」。安装器的行为：
+双击安装包 → 接受 UAC → 可按需勾选「附带安装万象语言模型 (`wanxiang-lts-zh-hans.gram`，约 373 MB)」→ 点击「开始安装」→ `Win + Space` 选「cips-input」。安装器的行为：
 
-- **机器上没有 PIME**：静默运行包内**未改动**的官方 PIME 2.0.0-beta4 安装包，装好后再把 cips-input 模块部署进去。这是完整版安装包，会一并装上 PIME 自带的其它输入法（Chewing、Rime、拼音/仓颉等）。
+- **安装器与大模型分离**：373 MB 的万象语言模型默认不打进 exe，而在安装时作为可选项：
+  - 若安装包同目录存在 `wanxiang-lts-zh-hans.gram`，界面会自动勾选并离线安装；
+  - 也可在安装界面点击「选择本地模型...」，或勾选后由安装器在线下载并校验 SHA-256；
+  - 静默/自动化模式：`/batch -InstallGram`（在线下载）或 `/batch -InstallGram -GramPath <路径>`（本地文件）。
+- **机器上没有 PIME**：静默运行包内**未改动**的官方 PIME 2.0.0-beta4 安装包，并默认移除 PIME 自带的繁体新酷音输入法，只保留 `cips-input`（内置白霜拼音）。
 - **机器上已经有 PIME**：只添加/更新 cips-input 模块，不动其它输入法（安装标记记为 `module` 模式，卸载时也只移除模块）。
 - 固定安装到 `C:\Program Files (x86)\PIME`：PIME 的 C++ 客户端把该路径硬编码在 `PIMEImeModule.cpp`（`SHGetFolderPathW(CSIDL_PROGRAM_FILESX86) + "\PIME"`），装到别处语言配置注册不上，所以**必须管理员权限，做不了便携版**。
 - 自动注册 x64/x86 文本服务（ARM64 机器注册 arm64 转发 DLL）、重启 `PIMELauncher`、刷新 `ctfmon`，并在「应用和功能」和开始菜单里注册卸载入口。
@@ -122,18 +126,20 @@ powershell -ExecutionPolicy Bypass -File deploy\bundle\build_installer.ps1
 
 ```powershell
 cd D:\Project\cips\cips-input
-.\deploy\install_backend.ps1
+.\deploy\install_backend.ps1 -PrepareRime
 ```
 
-脚本会做四件事：探测 PIME 安装目录（读 `backends.json` 校验，不靠猜注册表）、把 `src\input_methods\cips` 复制到 `<PIME>\python\input_methods\cips`、用 `regsvr32` 重新注册 x64 与 x86 的 `PIMETextService.dll`、重启 `PIMELauncher.exe`。
+脚本会做四件事：探测 PIME 安装目录（读 `backends.json` 校验，不靠猜注册表）、按需拉取并预编译白霜拼音（`-PrepareRime`，可选加 `-InstallGram` 挂载万象 `.gram` 模型）、把 `src\input_methods\cips` 复制到 `<PIME>\python\input_methods\cips`、用 `regsvr32` 重新注册 x64 与 x86 的 `PIMETextService.dll`、重启 `PIMELauncher.exe`。
 
 常用参数：
 
 ```powershell
-.\deploy\install_backend.ps1 -SkipRegister        # 只拷文件（改 Python 代码后日常用这个）
-.\deploy\install_backend.ps1 -SkipRestart         # 不改动正在运行的后端
-.\deploy\install_backend.ps1 -Uninstall           # 移除模块
-.\deploy\install_backend.ps1 -PimeDir "D:\PIME"   # 指定安装目录
+.\deploy\install_backend.ps1 -SkipRegister                       # 只更新 Python 代码（保留已部署的 Rime 数据）
+.\deploy\install_backend.ps1 -PrepareRime -InstallGram           # 一并部署白霜拼音 + 万象 gram 模型
+.\deploy\install_backend.ps1 -PrepareRime -GramPath D:\wanxiang-lts-zh-hans.gram
+.\deploy\install_backend.ps1 -SkipRestart                        # 不改动正在运行的后端
+.\deploy\install_backend.ps1 -Uninstall                          # 移除模块
+.\deploy\install_backend.ps1 -PimeDir "D:\PIME"                  # 指定安装目录
 ```
 
 **改 Python 代码只需要 `-SkipRegister`**：后端进程每次加载输入法时重新 import，热键逻辑不涉及 TSF 注册表。只有改了 `ime.json`（名字、GUID、图标、语言）才需要重新注册。
@@ -156,7 +162,7 @@ cd D:\Project\cips\cips-input
 
 再按一次相同热键会取消正在进行的逐字注入。
 
-cips-input 平时是完全透明的：`filterKeyDown` 对除上述组合外的所有按键返回 `False`，所以你可以一直把输入法停在它上面，日常打字不受影响。
+日常中文打字由内置的**白霜拼音（Rime Frost）**通过标准 TSF 编辑会话上屏（支持全拼、自然码/小鹤/微软/搜狗双拼、用户词典记忆，以及可选的万象语言模型 `wanxiang-lts-zh-hans.gram`）；默认采用**横条配列**与**白霜圆角**皮肤，任务栏语言栏菜单可一键切换 **Gemini 星辉猫娘** / **白霜圆角** / **系统原生**皮肤、横竖配列、是否加载万象模型、中英文、全半角、简繁、Emoji、拆分提示与输入方案。用户词库位于 `%APPDATA%\cips-input\rime`，界面设置位于 `%APPDATA%\cips-input\settings.json`。
 
 热键是通过 TSF 保留键注册的（`addPreservedKey`），因此不怕被应用的快捷键表吞掉——这是 `Ctrl+Alt+V` 在多数程序里能生效的原因。
 
@@ -274,19 +280,23 @@ PIME 只把符合 `PIME_MSG|` 协议的行当作回复，其余 stdout 一律丢
 src/input_methods/cips/      部署单元，整个目录拷到 <PIME>\python\input_methods\
 ├── ime.json                 输入法元数据（名字 cips-input、GUID、图标、版本）
 ├── icon.ico                 输入法图标（蓝底白字 IPT）
+├── icons/                   语言栏状态图标（中/英、全/半角、设置）
 ├── profiles.json            每程序注入策略 + 拟人节奏参数
-├── cips_ime.py              TextService 实现：热键、分派、后台注入线程
+├── cips_ime.py              TextService 实现：Rime Frost 中文输入 + 热键注入线程
 ├── core/                    纯逻辑层：判空、归一化、分块规划、配置解析、策略解析（不 import win32）
+├── rime_engine/             librime 1.17.x ctypes 绑定、键位映射、异步生命周期与菜单样式
+├── rime_config/             cips.yaml、默认白霜方案列表与万象 gram 补丁模板
 └── win32/                   平台层：剪贴板、SendInput、前台窗口、读回校验
-tests/                       单元测试（纯标准库）
+tests/                       单元测试与 Rime 集成测试（纯标准库）
+deploy/prepare_rime.ps1      拉取校验 librime 1.17.0 (x86) 与 rime-frost 1.0.6 并预编译词库
 deploy/install_backend.ps1   手动部署与注册脚本（方式 B）
 deploy/bundle/               一键安装包构建
-├── build_installer.ps1      下载/校验 PIME 安装包、组装 payload、编译引导器、自检
-├── install.ps1              安装逻辑（full / module 两种模式）
+├── build_installer.ps1      组装 PIME + 预编译白霜词库、编译引导器、自检
+├── install.ps1              安装逻辑（full / module 模式 + 可选万象 gram 模型）
 ├── uninstall.ps1            卸载逻辑（按安装标记分模式处理）
 ├── common.ps1               两个脚本共用的路径/注册/服务控制/快捷方式工具
 ├── THIRD_PARTY_NOTICES.md   随包安装的第三方声明
-└── installer/               自解压引导器（C# + requireAdministrator 清单）
+└── installer/               自解压引导器（C# + requireAdministrator 清单 + 可选模型勾选）
 tools/fi_probe.py            独立探针：验证某个输入框到底吃不吃注入（--read-back 可读回）
 tools/build_icon.py          生成 icon.ico（BMP 帧 + 256 PNG 帧）
 docs/pime-api.md             PIME 后端 API 调研（带源码行号证据）
@@ -302,7 +312,7 @@ CHANGELOG.md                 版本变更记录
 - **它不「破解」验证码**。cips-input 只是把**你已经知道的**文本填进去；识别验证码是另一件事。
 - **不是所有输入框都能过**。控件如果既拦粘贴、又要求 `keydown`，而目标窗口权限更高，那就走不通。
 - **不做针对性规避**。本项目不针对具体平台的检测逻辑做适配或反检测。
-- **没有自带中文输入**。本模块只负责「把文本打进去」，中文靠系统里其它输入法——注入的是 Unicode 字符，与当前输入法无关。
+- **内置中文输入首次运行需数秒预热**：Rime 在后台线程完成首次用户目录部署，不阻塞 PIME；部署期间按字母键会提示正在加载，稍候片刻即可正常中文输入（热键不受影响）。
 - 逐字注入是异步的：热键按下后立刻返回，实际按键在后台线程发出。注入期间再次按热键会取消。
 - 单次文本上限 20000 字；拟人档下这可能需要一小时以上，日志会给出预计时长。
 

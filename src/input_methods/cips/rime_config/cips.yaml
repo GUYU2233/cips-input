@@ -1,0 +1,59 @@
+# cips-input Rime UI & menu settings
+# encoding: utf-8
+
+config_version: "0.51"
+
+style:
+  font_face: "Microsoft YaHei UI"
+  font_point: 12
+  inline_preedit: composition
+  display_tray_icon: true
+  candidate_format: "{0} {1}"
+  candidate_per_row: 8
+  candidate_use_cursor: true
+  soft_cursor: false
+  menu_opencc: ""
+
+menu:
+  - name: ascii_mode
+    states: [ 中文, 英文 ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: ascii_punct
+    states: [ 。，, ．， ]
+  - name: traditionalization
+    states: [ 简体, 繁体 ]
+  - name: emoji
+    states: [ 无Emoji, Emoji ]
+  - name: chaifen
+    states: [ 拆分关, 拆分开 ]
+  - text: ""
+  - text: "方案列表(&L)"
+    command: "get_schema_list"
+  - text: "皮肤主题(&T)"
+    submenu:
+      - text: "白霜圆角 (默认)"
+        command: "skin_frost_round"
+      - text: "Gemini 星辉猫娘"
+        command: "skin_gemini_neko"
+      - text: "系统原生 (GDI)"
+        command: "skin_native"
+  - text: "候选栏配列(&H)"
+    command: "toggle_layout"
+  - text: "万象语言模型(&G)"
+    command: "toggle_gram"
+  - text: ""
+  - text: "重新部署(&D)"
+    command: "deploy"
+  - text: "同步词库(&S)"
+    command: "sync_user_data"
+  - text: "打开文件夹(&O)"
+    submenu:
+      - text: "用户词库文件夹"
+        command: "get_user_data_dir"
+      - text: "共享方案文件夹"
+        command: "get_shared_data_dir"
+      - text: "同步文件夹"
+        command: "get_sync_dir"
+      - text: "诊断日志文件夹"
+        command: "get_log_dir"

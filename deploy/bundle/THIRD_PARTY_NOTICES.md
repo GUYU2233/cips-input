@@ -1,46 +1,33 @@
 # Third-party notices
 
 The cips-input installer bundles and redistributes the **official, unmodified
-PIME 2.0.0-beta4 installer**. Running it installs the PIME runtime, which
-contains the components below. The cips-input module is added on top of that
-runtime.
-
-Nothing in this bundle is a modified copy of a third-party component: the
-official installer is shipped byte-for-byte (SHA-256 is embedded in
-`bundle.json` and verified before it runs), and the cips-input module is this
-project's own code.
+PIME 2.0.0-beta4 installer**, along with **librime** (with Lua and Octagram
+plugins) and the **Rime Frost** (`rime-frost`) schema and dictionary package so
+`cips-input` provides built-in Chinese Pinyin input out of the box.
 
 ## Bundled components
 
 | Component | License | Source |
 |---|---|---|
-| PIME 2.0.0-beta4 | LGPL-2.1-or-later (license text: `licenses/LGPL-2.0.txt`, `licenses/LICENSE-PIME.txt`) | https://github.com/EasyIME/PIME |
-| CPython 3.15 (embedded in PIME) | Python Software Foundation License (license text: `licenses/PSF.txt`) | https://www.python.org/ |
-| Tornado (bundled with the PIME Python backend) | Apache License 2.0 (license text: `licenses/APACHE-2.0.txt`) | https://www.tornadoweb.org/ |
+| PIME 2.0.0-beta4 | LGPL-2.1-or-later (`licenses/LGPL-2.0.txt`, `licenses/LICENSE-PIME.txt`) | https://github.com/EasyIME/PIME |
+| CPython 3.15 (embedded in PIME) | Python Software Foundation License (`licenses/PSF.txt`) | https://www.python.org/ |
+| Tornado (bundled with PIME Python backend) | Apache License 2.0 (`licenses/APACHE-2.0.txt`) | https://www.tornadoweb.org/ |
+| librime 1.17.0 (+ librime-lua / librime-octagram) | BSD-3-Clause / MIT / GPL-3.0 | https://github.com/rime/librime |
+| Rime Frost (白霜拼音) 1.0.6 | GPL-3.0 (`licenses/GPL-3.0-rime-frost.txt`) | https://github.com/gaboolic/rime-frost |
 | cips-input module | LGPL-2.1-or-later | this project |
 
-PIME's installer may also install additional PIME input methods (Chewing,
-Rime, cj/cin-based methods, node.js based methods). Those ship under their own
-licenses, which the official PIME installer presents and installs; this
-notice covers only what the cips-input bundle adds and triggers.
+## Optional downloaded component
+
+When the user opts in during installation, the installer downloads or copies:
+
+| Component | License / Origin | Source |
+|---|---|---|
+| Wanxiang LTS N-gram (`wanxiang-lts-zh-hans.gram`) | Upstream RIME-LMDG / rime-wanxiang-data | https://github.com/amzxyz/RIME-LMDG |
 
 ## Source code and relinking
 
 The LGPL permits replacing the covered libraries with modified versions. PIME
 is installed as ordinary DLLs under `C:\Program Files (x86)\PIME\x64` and
-`...\x86` (plus `...\arm64` on ARM64 systems), so they can be replaced in
-place. The corresponding source code is available at the PIME repository
-linked above; the cips-input module's source and the scripts that build this
-installer are in this project.
-
-## The installer bootstrapper
-
-`cips-input-setup-*.exe` itself contains only:
-
-* the official PIME installer (unmodified),
-* the cips-input module source files,
-* PowerShell install/uninstall scripts written for this project,
-* this notice and the license texts listed above.
-
-It links against the .NET Framework that ships with Windows; no third-party
-code is embedded in the bootstrapper.
+`...\x86` (plus `...\arm64` on ARM64 systems), and `librime` ships as
+`rime_runtime\rime.dll` inside the `cips` module folder, so they can be
+replaced in place.

@@ -56,6 +56,23 @@ class BundleAssetsTests(unittest.TestCase):
         self.assertIn("PIMELauncher", text)
         self.assertIn("Get-PimeInstallDir", text)
         self.assertIn("Register-TextService", text)
+        self.assertIn("InstallGram", text)
+        self.assertIn("GramPath", text)
+        self.assertIn("Remove-BundledPimeImes", text)
+
+    def test_bootstrapper_offers_optional_gram_ui(self):
+        text = (BUNDLE_DIR / "installer" / "Installer.cs").read_text(encoding="utf-8")
+        self.assertIn("InstallGram", text)
+        self.assertIn("GramPath", text)
+        self.assertIn("wanxiang-lts-zh-hans.gram", text)
+
+    def test_rime_config_and_skin_assets_exist(self):
+        for rel in ("cips.yaml", "default.custom.yaml", "gram_patch.yaml"):
+            with self.subTest(file=rel):
+                self.assertTrue((CIPS_DIR / "rime_config" / rel).is_file(), rel)
+        self.assertTrue((CIPS_DIR / "skins" / "gemini_neko_mascot.png").is_file())
+        self.assertTrue((CIPS_DIR / "win32" / "candidate_ui.py").is_file())
+        self.assertTrue((REPO_ROOT / "deploy" / "prepare_rime.ps1").is_file())
 
     def test_uninstall_script_reads_the_install_marker(self):
         text = (BUNDLE_DIR / "uninstall.ps1").read_text(encoding="utf-8")
@@ -92,7 +109,7 @@ class BundleAssetsTests(unittest.TestCase):
         )
         if not os.path.isfile(powershell):
             self.skipTest("Windows PowerShell 5.1 is not available")
-        for name in ("common.ps1", "install.ps1", "uninstall.ps1", "build_installer.ps1"):
+        for name in ("common.ps1", "install.ps1", "uninstall.ps1", "build_installer.ps1", "../prepare_rime.ps1", "../install_backend.ps1"):
             path = (BUNDLE_DIR / name).as_posix()
             script = (
                 "$errors=$null; $tokens=$null;"

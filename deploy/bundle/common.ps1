@@ -49,6 +49,19 @@ function Fail {
     throw $Message
 }
 
+function Get-Sha256Hex {
+    param([string]$LiteralPath)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($LiteralPath)
+    try {
+        $bytes = $sha.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 function Test-Administrator {
     try {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -335,17 +348,19 @@ function Write-InstallMarker {
         [string]$PimeVersion,
         [string]$Mode,
         [string]$InstallDir,
-        [string]$PythonDir
+        [string]$PythonDir,
+        [bool]$GramInstalled = $false
     )
     $marker = [ordered]@{
-        product      = $script:ProductName
-        version      = $Version
-        pimeVersion  = $PimeVersion
-        mode         = $Mode
-        installDir   = $InstallDir
-        pythonDir    = $PythonDir
-        installedAt  = (Get-Date).ToString('o')
-        installedBy  = 'cips-input installer'
+        product       = $script:ProductName
+        version       = $Version
+        pimeVersion   = $PimeVersion
+        mode          = $Mode
+        installDir    = $InstallDir
+        pythonDir     = $PythonDir
+        gramInstalled = $GramInstalled
+        installedAt   = (Get-Date).ToString('o')
+        installedBy   = 'cips-input installer'
     }
     $path = Join-Path $SupportDir $script:MarkerName
     $marker | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding UTF8

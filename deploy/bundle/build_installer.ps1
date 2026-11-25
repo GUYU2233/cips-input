@@ -4,20 +4,23 @@
 #   * the official, unmodified PIME 2.0.0-beta4 installer (downloaded once and
 #     verified against a pinned SHA-256),
 #   * the cips-input module from src/input_methods/cips,
+#   * embedded librime 1.17.0 (x86) + precompiled rime-frost 1.0.6 data
+#     (staged into build\bundle\rime_stage via deploy\prepare_rime.ps1),
 #   * install.ps1 / uninstall.ps1 / common.ps1,
 #   * license texts and THIRD_PARTY_NOTICES.md,
 #   * a small .NET bootstrapper compiled with the csc.exe that ships with
 #     Windows (no Visual Studio, NSIS, 7-Zip or PyInstaller required).
 #
+# The large Wanxiang language model (wanxiang-lts-zh-hans.gram, ~373 MB) is
+# intentionally NOT embedded into the .exe; the installer makes attaching it
+# an optional choice at install time (online download or local file).
+#
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File deploy\bundle\build_installer.ps1
 #   powershell -File deploy\bundle\build_installer.ps1 -PimeSetup D:\tmp\PIME-setup.exe
-#   powershell -File deploy\bundle\build_installer.ps1 -SkipSelfTest
+#   powershell -File deploy\bundle\build_installer.ps1 -SkipDownload -SkipSelfTest
 #
 # Output: build\dist\cips-input-setup-<version>.exe + SHA256SUMS.txt
-#
-# The build is offline after the first run (the PIME installer is cached under
-# build\cache). Pass -SkipDownload to fail instead of downloading.
 
 [CmdletBinding()]
 param(
@@ -34,6 +37,11 @@ $script:PimeSetupName = 'PIME-2.0.0-beta4-setup.exe'
 $script:PimeSetupUrl = 'https://github.com/EasyIME/PIME/releases/download/v2.0.0-beta4/PIME-2.0.0-beta4-setup.exe'
 $script:PimeSetupSha256 = '3bc146bd89daa6b5eb89d2346ece445f8752e0df6d194959644e359ea197fcdf'
 $script:PimeSetupSize = 48664288
+
+$script:GramFileName = 'wanxiang-lts-zh-hans.gram'
+$script:GramUrl      = 'https://github.com/amzxyz/rime-wanxiang-data/releases/download/LTS/wanxiang-lts-zh-hans.gram'
+$script:GramSha256   = 'e9ddd501b7d536bc5ea1346f8f900ae49a719a05be349e0a17cb27e717143ca5'
+$script:GramSize     = 390786092
 
 function Write-Step {
     param([string]$Message)
@@ -72,6 +80,7 @@ if (Test-Path -LiteralPath $pimeVersionFile) {
 $buildRoot = Join-Path $repoRoot 'build'
 $cacheDir = Join-Path $buildRoot 'cache'
 $workDir = Join-Path $buildRoot 'bundle'
+$rimeStageDir = Join-Path $workDir 'rime_stage'
 $payloadDir = Join-Path $workDir 'payload'
 $stageDir = Join-Path $workDir 'installer'
 $distDir = if ($OutDir) { [IO.Path]::GetFullPath($OutDir) } else { Join-Path $buildRoot 'dist' }
@@ -135,6 +144,19 @@ if ($setupHash -ne $script:PimeSetupSha256) {
 }
 
 # ---------------------------------------------------------------------------
+# embedded Rime runtime + precompiled rime-frost data
+# ---------------------------------------------------------------------------
+
+Write-Step 'Preparing embedded Rime runtime and rime-frost data'
+$prepareScript = Join-Path (Split-Path -Parent $bundleDir) 'prepare_rime.ps1'
+Assert-File $prepareScript 'prepare_rime.ps1'
+$prepareArgs = @{ TargetDir = $rimeStageDir }
+if ($SkipDownload) { $prepareArgs['SkipDownload'] = $true }
+& $prepareScript @prepareArgs
+Assert-File (Join-Path $rimeStageDir 'rime_runtime\rime.dll') 'staged rime.dll'
+Assert-File (Join-Path $rimeStageDir 'rime_data\build\rime_frost.table.bin') 'precompiled rime_frost.table.bin'
+
+# ---------------------------------------------------------------------------
 # payload
 # ---------------------------------------------------------------------------
 
@@ -155,7 +177,31 @@ Copy-Item -LiteralPath $srcModule -Destination $moduleTarget -Recurse -Force
 foreach ($cache in @(Get-ChildItem -LiteralPath $moduleTarget -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)) {
     Remove-Item -LiteralPath $cache.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
-foreach ($required in @('ime.json', 'profiles.json', 'cips_ime.py', 'icon.ico', 'core\__init__.py', 'win32\__init__.py')) {
+# Replace any local dev rime_runtime/rime_data with the cleanly staged copies.
+foreach ($rimeSub in @('rime_runtime', 'rime_data')) {
+    $destSub = Join-Path $moduleTarget $rimeSub
+    if (Test-Path -LiteralPath $destSub) {
+        Remove-Item -LiteralPath $destSub -Recurse -Force
+    }
+    Copy-Item -LiteralPath (Join-Path $rimeStageDir $rimeSub) -Destination $destSub -Recurse -Force
+}
+
+foreach ($required in @(
+    'ime.json',
+    'profiles.json',
+    'cips_ime.py',
+    'ui_settings.py',
+    'icon.ico',
+    'core\__init__.py',
+    'win32\__init__.py',
+    'win32\candidate_ui.py',
+    'rime_engine\__init__.py',
+    'rime_config\cips.yaml',
+    'rime_config\gram_patch.yaml',
+    'skins\gemini_neko_mascot.png',
+    'rime_runtime\rime.dll',
+    'rime_data\build\rime_frost.table.bin'
+)) {
     Assert-File (Join-Path $moduleTarget $required) ('module\' + $required)
 }
 
@@ -175,6 +221,10 @@ foreach ($item in $licenseSources) {
         Write-Note ('license text missing, skipped: ' + $item.From)
     }
 }
+$frostLicense = Join-Path $rimeStageDir 'rime_data\LICENSE'
+if (Test-Path -LiteralPath $frostLicense) {
+    Copy-Item -LiteralPath $frostLicense -Destination (Join-Path $licenses 'GPL-3.0-rime-frost.txt') -Force
+}
 if (@(Get-ChildItem -LiteralPath $licenses -File).Count -eq 0) {
     throw 'No license texts were collected; refusing to build a redistributable bundle.'
 }
@@ -188,6 +238,10 @@ $bundleJson = [ordered]@{
     pimeSetup        = $script:PimeSetupName
     pimeSetupSha256  = $setupHash
     pimeSetupSize    = $setupLength
+    gramFile         = $script:GramFileName
+    gramUrl          = $script:GramUrl
+    gramSha256       = $script:GramSha256
+    gramSize         = $script:GramSize
     builtAt          = (Get-Date).ToString('o')
     builtBy          = 'deploy/bundle/build_installer.ps1'
 }
@@ -195,7 +249,7 @@ $bundleJson | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $payloadDir '
 
 $payloadFiles = @(Get-ChildItem -LiteralPath $payloadDir -Recurse -File)
 $payloadBytes = ($payloadFiles | Measure-Object -Property Length -Sum).Sum
-Write-Note ('{0} files, {1:N1} MB' -f $payloadFiles.Count, ($payloadBytes / 1MB))
+Write-Note ('{0} files, {1:N1} MB uncompressed' -f $payloadFiles.Count, ($payloadBytes / 1MB))
 
 # ---------------------------------------------------------------------------
 # verify payload scripts parse
@@ -232,7 +286,7 @@ if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force 
 [IO.Compression.ZipFile]::CreateFromDirectory(
     $payloadDir,
     $zipPath,
-    [IO.Compression.CompressionLevel]::NoCompression,
+    [IO.Compression.CompressionLevel]::Optimal,
     $false
 )
 Write-Note ('payload.zip: {0:N1} MB' -f ((Get-Item -LiteralPath $zipPath).Length / 1MB))
@@ -271,7 +325,7 @@ Assert-File $stageExe 'compiled installer'
 # ---------------------------------------------------------------------------
 
 if (-not $SkipSelfTest) {
-    Write-Step 'Self-test: installer dry run'
+    Write-Step 'Self-test: installer dry run (default & -InstallGram)'
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $dryOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $payloadDir 'install.ps1') -DryRun -NoPrompt -NoRegister -NoElevate 2>&1
     $dryExit = $LASTEXITCODE
@@ -279,16 +333,24 @@ if (-not $SkipSelfTest) {
     if ($dryExit -ne 0) {
         throw ('install.ps1 -DryRun failed with exit code {0}: {1}' -f $dryExit, $dryText)
     }
-    if ($dryText -notmatch 'Dry run') {
-        throw ('install.ps1 -DryRun did not report a dry run. Output: ' + $dryText)
+    if ($dryText -notmatch 'Dry run' -or $dryText -notmatch 'would install wanxiang gram model: False') {
+        throw ('install.ps1 -DryRun did not report expected dry-run output. Output: ' + $dryText)
     }
-    Write-Note 'install.ps1 -DryRun OK'
 
-    Write-Step 'Self-test: module mode layout (fake PIME tree)'
+    $dryGramOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $payloadDir 'install.ps1') -DryRun -InstallGram -NoPrompt -NoRegister -NoElevate 2>&1
+    $dryGramExit = $LASTEXITCODE
+    $dryGramText = ($dryGramOutput | ForEach-Object { [string]$_ }) -join "`n"
+    if ($dryGramExit -ne 0 -or $dryGramText -notmatch 'would install wanxiang gram model: True') {
+        throw ('install.ps1 -DryRun -InstallGram failed. Output: ' + $dryGramText)
+    }
+    Write-Note 'install.ps1 -DryRun (base & -InstallGram) OK'
+
+    Write-Step 'Self-test: module mode layout (fake PIME tree, with optional gram)'
     $selfTestRoot = Join-Path $workDir 'selftest'
     if (Test-Path -LiteralPath $selfTestRoot) { Remove-Item -LiteralPath $selfTestRoot -Recurse -Force }
     $fakePime = Join-Path $selfTestRoot 'PIME'
     $fakeSupport = Join-Path $selfTestRoot 'support'
+    $fakeGram = Join-Path $selfTestRoot 'fake.gram'
     New-Item -ItemType Directory -Path (Join-Path $fakePime 'x64') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fakePime 'x86') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fakePime 'python\input_methods') -Force | Out-Null
@@ -297,22 +359,24 @@ if (-not $SkipSelfTest) {
     Set-Content -LiteralPath (Join-Path $fakePime 'x64\PIMETextService.dll') -Value '' -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $fakePime 'x86\PIMETextService.dll') -Value '' -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $fakePime 'python\input_methods\__init__.py') -Value '' -Encoding ASCII
+    Set-Content -LiteralPath $fakeGram -Value 'stub-gram-for-selftest' -Encoding ASCII
 
     $installOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $payloadDir 'install.ps1') `
-        -InstallDir $fakePime -SupportDir $fakeSupport -NoRegister -NoLaunch -NoPrompt -NoElevate 2>&1
+        -InstallDir $fakePime -SupportDir $fakeSupport -InstallGram -GramPath $fakeGram -NoRegister -NoLaunch -NoPrompt -NoElevate 2>&1
     $installExit = $LASTEXITCODE
     if ($installExit -ne 0) {
         throw ('module-mode install failed with exit code {0}: {1}' -f $installExit, (($installOutput | ForEach-Object { [string]$_ }) -join "`n"))
     }
-    $moduleInFake = Join-Path $fakePime 'python\input_methods\cips\ime.json'
-    Assert-File $moduleInFake 'deployed module'
+    Assert-File (Join-Path $fakePime 'python\input_methods\cips\ime.json') 'deployed module'
+    Assert-File (Join-Path $fakePime 'python\input_methods\cips\rime_data\wanxiang-lts-zh-hans.gram') 'deployed gram'
+    Assert-File (Join-Path $fakePime 'python\input_methods\cips\rime_data\rime_frost.custom.yaml') 'deployed gram patch'
     $markerPath = Join-Path $fakeSupport 'install.json'
     Assert-File $markerPath 'install marker'
     $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-    if ([string]$marker.mode -ne 'module') {
-        throw ('expected module mode in the marker, got: ' + [string]$marker.mode)
+    if ([string]$marker.mode -ne 'module' -or -not [bool]$marker.gramInstalled) {
+        throw ('unexpected install marker contents: ' + (Get-Content -LiteralPath $markerPath -Raw))
     }
-    Write-Note 'module mode install OK'
+    Write-Note 'module mode install (+ optional gram) OK'
 
     $uninstallOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fakeSupport 'uninstall.ps1') `
         -SupportDir $fakeSupport -InstallDir $fakePime -NoRegister -NoLaunch -NoPrompt -Force -NoElevate 2>&1
@@ -356,8 +420,6 @@ $existing += ('{0}  {1}' -f $outHash, $exeName)
 Set-Content -LiteralPath $sumsPath -Value $existing -Encoding ASCII
 
 if (-not $KeepStage) {
-    # Keep the build tree small: only the cached PIME package and the published
-    # installer are kept between builds. Use -KeepStage to inspect the payload.
     foreach ($intermediate in @($stageDir, $payloadDir, (Join-Path $workDir 'selftest'))) {
         if (Test-Path -LiteralPath $intermediate) {
             Remove-Item -LiteralPath $intermediate -Recurse -Force -ErrorAction SilentlyContinue
@@ -372,5 +434,5 @@ Write-Note ('size:      {0:N1} MB' -f ($outSize / 1MB))
 Write-Note ('sha256:    ' + $outHash)
 Write-Note ('checksums: ' + $sumsPath)
 Write-Note ''
-Write-Note 'The installer is self-contained: double-click it, accept the UAC prompt, and it will'
-Write-Note 'install PIME (first run) or add cips-input to an existing PIME installation.'
+Write-Note 'The installer is self-contained for base rime-frost + PIME, and offers'
+Write-Note 'attaching the Wanxiang language model (wanxiang-lts-zh-hans.gram) as an install option.'

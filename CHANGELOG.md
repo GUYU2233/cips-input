@@ -2,6 +2,19 @@
 
 版本号与 `src/input_methods/cips/ime.json` 的 `version` 保持一致。
 
+## 0.5.0
+
+这一版为 `cips-input` 内置了完整的 **白霜拼音（Rime Frost）** 中文输入能力，并将 **万象 LTS 语言模型（`wanxiang-lts-zh-hans.gram`）** 做成安装时的可选项。
+
+### 新增
+
+- 内置 `librime` 1.17.0（32 位 x86，含 `lua` 与 `octagram` 插件）及预编译的 `rime-frost` 1.0.6 词库/方案（全拼与自然码/小鹤/微软/搜狗双拼），日常中文打字走标准 TSF 组合与上屏，`Ctrl+Alt+V/1/2/3/Z` 剪贴板逐字注入热键优先级保持不变。
+- 默认改为**横条配列**，新增基于 GDI+ 分层窗口的自定义候选栏皮肤：`白霜圆角`（默认）与 `Gemini 星辉猫娘`（含可点击选词与 `系统原生` 切换），设置保存在 `%APPDATA%\cips-input\settings.json`。
+- `RimeEngine`（`src/input_methods/cips/rime_engine/`）：在后台线程异步初始化与部署 Rime，避免阻塞 PIME 的 2 秒 RPC 超时；默认保留用户词典（`enable_user_dict`），并支持在菜单里随时开关「是否加载万象语言模型」。
+- 安装器与模型分离：单文件安装包内含 PIME 运行时与预编译白霜词库，在完整安装模式下自动移除 PIME 自带的繁体新酷音（`chewing`）只保留白霜；373 MB 的 `wanxiang-lts-zh-hans.gram` 作为安装时可选项（支持同目录自动识别、手动选文件或在线校验下载），`/batch` 支持 `-InstallGram` 与 `-GramPath`。
+- 新增语言栏菜单（中英、全半角、简繁、Emoji、拆分提示、方案切换、皮肤主题、候选栏配列、万象模型开关、异步重新部署、打开用户词库/日志目录）。
+- 新增 `deploy/prepare_rime.ps1`：自动缓存校验 `librime` 与 `rime-frost` 压缩包并调用 `rime_deployer.exe --build` 预编译词库。
+
 ## 0.4.0
 
 这一版把部署从「先装 PIME、再跑脚本」变成「双击一个 exe」。
